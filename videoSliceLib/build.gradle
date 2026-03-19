@@ -38,7 +38,7 @@ afterEvaluate {
             from components.findByName(variant.name)
             groupId = 'com.github.cleverSmallPanda'
             artifactId = 'VideoUtils'
-            version = 'v1.0.4'
+            version = 'v1.0.5'
         }
     }
 }
