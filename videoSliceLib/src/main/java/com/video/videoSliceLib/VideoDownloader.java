@@ -6,16 +6,18 @@ import android.util.Log;
 
 import com.arthenica.mobileffmpeg.Config;
 import com.arthenica.mobileffmpeg.FFmpeg;
+import com.lzy.okgo.OkGo;
+import com.lzy.okgo.callback.FileCallback;
+import com.lzy.okgo.model.Progress;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
 
 /**
  * 常规视频下载工具（支持 mp4、mov、avi 等格式）
@@ -51,146 +53,131 @@ public class VideoDownloader {
 
     // ==================== 同步核心方法 ====================
     public void downloadVideoToMP4Sync(String videoUrl, final DownloadCallback callback) {
-        File outputFile = null;
-        File tempFile = null;
+        // 生成临时文件和最终输出文件（名称基于时间戳）
+        String timestamp = String.valueOf(System.currentTimeMillis());
+        File tempFile = new File(outputDir, "temp_" + timestamp + ".tmp");
+        File finalFile = new File(outputDir, "video_" + timestamp + ".mp4");
+
+        // 用于同步等待下载完成的工具
+        CountDownLatch latch = new CountDownLatch(1);
+        final boolean[] downloadSuccess = {false};
+        final String[] errorMsg = {null};
+
+        OkHttpClient client = new OkHttpClient.Builder()
+                .connectTimeout(60, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .build();
+        // 发起异步下载请求
+        OkGo.<File>get(videoUrl)
+                .tag(this)
+                .client(client)
+                .execute(new FileCallback(outputDir, tempFile.getName()) {
+                    @Override
+                    public void onSuccess(com.lzy.okgo.model.Response<File> response) {
+                        downloadSuccess[0] = true;
+                        latch.countDown();
+                    }
+
+                    @Override
+                    public void onError(com.lzy.okgo.model.Response<File> response) {
+                        super.onError(response);
+                        downloadSuccess[0] = false;
+                        errorMsg[0] = response.getException() != null
+                                ? response.getException().getMessage()
+                                : "下载失败";
+                        latch.countDown();
+                    }
+
+                    @Override
+                    public void downloadProgress(Progress progress) {
+                        super.downloadProgress(progress);
+                        int progressInt = (int) (progress.fraction * 100);
+                        callback.onProgress(progressInt);
+                    }
+                });
+
+        // 等待下载线程完成
         try {
-            // 1. 确定输出文件路径
-            String outputFileName = "video_" + System.currentTimeMillis() + ".mp4";
-            outputFile = new File(outputDir, outputFileName);
-            outputFile.getParentFile().mkdirs();
+            latch.await();
+        } catch (InterruptedException e) {
+            callback.onError("下载被中断");
+            return;
+        }
 
-            // 2. 根据 URL 判断是否需要转码
-            boolean needTranscode = !isFileMP4(videoUrl);
+        // 下载失败处理
+        if (!downloadSuccess[0]) {
+            callback.onError(errorMsg[0] != null ? errorMsg[0] : "未知下载错误");
+            return;
+        }
 
-            if (!needTranscode) {
-                // 直接下载到最终文件
-                callback.onProgress(1);
-                long totalBytes = downloadFile(videoUrl, outputFile, new ProgressListener() {
-                    @Override
-                    public void onProgress(long downloaded, long total) {
-                        if (total > 0) {
-                            int progress = (int) (downloaded * 100 / total);
-                            callback.onProgress(progress);
-                        }
-                    }
-                });
-                if (totalBytes <= 0) {
-                    if (outputFile.exists()) outputFile.delete();
-                    callback.onError("下载失败或文件为空");
-                    return;
-                }
-                callback.onProgress(100);
-                callback.onComplete(outputFile.getAbsolutePath());
+        // 判断已下载的文件是否为 MP4 格式
+        if (isFileMP4(tempFile, videoUrl)) {
+            // 已经是 MP4，直接复制到最终路径
+            boolean copied = copyFile(tempFile, finalFile);
+            tempFile.delete(); // 删除临时文件
+            if (copied) {
+                callback.onComplete(finalFile.getAbsolutePath());
             } else {
-                // 需要转码：先下载到临时文件
-                String tempFileName = "temp_" + System.currentTimeMillis() + ".tmp";
-                tempFile = new File(outputDir, tempFileName);
-                tempFile.getParentFile().mkdirs();
-
-                callback.onProgress(1);
-                long totalBytes = downloadFile(videoUrl, tempFile, new ProgressListener() {
-                    @Override
-                    public void onProgress(long downloaded, long total) {
-                        if (total > 0) {
-                            int progress = (int) (downloaded * 90 / total);
-                            callback.onProgress(progress);
-                        }
-                    }
-                });
-                if (totalBytes <= 0) {
-                    if (tempFile.exists()) tempFile.delete();
-                    callback.onError("下载失败或文件为空");
-                    return;
-                }
-                callback.onProgress(90);
-
-                // 转码
-                boolean transcodeSuccess = transcodeToMP4(tempFile, outputFile);
-                if (!transcodeSuccess) {
-                    callback.onError("视频转码失败");
-                    if (tempFile.exists()) tempFile.delete();
-                    if (outputFile.exists()) outputFile.delete();
-                    return;
-                }
-                // 清理临时文件
-                if (tempFile.exists()) tempFile.delete();
-
-                callback.onProgress(100);
-                callback.onComplete(outputFile.getAbsolutePath());
+                callback.onError("复制文件失败");
             }
-        } catch (Exception e) {
-            Log.e(TAG, "处理失败", e);
-            callback.onError(e.getMessage());
-            if (outputFile != null && outputFile.exists()) outputFile.delete();
-            if (tempFile != null && tempFile.exists()) tempFile.delete();
+        } else {
+            // 需要转码为 MP4
+            boolean transcoded = transcodeToMP4(tempFile, finalFile);
+            tempFile.delete(); // 删除临时文件
+            if (transcoded) {
+                callback.onComplete(finalFile.getAbsolutePath());
+            } else {
+                callback.onError("转码失败");
+            }
         }
     }
 
     // ==================== 下载核心（使用 OkHttp，支持进度） ====================
-    private long downloadFile(String url, File targetFile, ProgressListener listener) throws IOException {
+    private void downloadFile(String url, File targetFile, DownloadCallback callback)  {
+
         OkHttpClient client = new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
+                .connectTimeout(60, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
                 .build();
+        OkGo.<File>get(url)
+                .client(client)
+                .tag(this)                       // 用于取消下载
+                .execute(new FileCallback(outputDir, targetFile.getName()) {
+                    @Override
+                    public void onSuccess(com.lzy.okgo.model.Response<File> response) {
 
-        Request request = new Request.Builder().url(url).build();
-        int maxRetries = 3;
-        int retryCount = 0;
-        while (retryCount < maxRetries) {
-            try (Response response = client.newCall(request).execute()) {
-                if (!response.isSuccessful()) {
-                    throw new IOException("HTTP " + response.code());
-                }
-
-                long contentLength = response.body().contentLength();
-                boolean hasKnownLength = contentLength > 0;
-
-                try (InputStream is = response.body().byteStream();
-                     FileOutputStream fos = new FileOutputStream(targetFile)) {
-                    byte[] buffer = new byte[8192];
-                    int bytesRead;
-                    long totalRead = 0;
-                    long lastUpdate = 0;
-                    final long UPDATE_INTERVAL = 500 * 1024; // 500KB
-
-                    while ((bytesRead = is.read(buffer)) != -1) {
-                        fos.write(buffer, 0, bytesRead);
-                        totalRead += bytesRead;
-
-                        if (hasKnownLength) {
-                            listener.onProgress(totalRead, contentLength);
-                        } else {
-                            if (totalRead - lastUpdate >= UPDATE_INTERVAL) {
-                                listener.onProgress(totalRead, -1); // 总大小未知
-                                lastUpdate = totalRead;
-                            }
-                        }
                     }
 
-                    // 下载完成，确保最终进度回调
-                    if (hasKnownLength) {
-                        listener.onProgress(totalRead, contentLength);
-                    } else {
-                        listener.onProgress(totalRead, totalRead); // 或传入 totalRead 作为最终值
-                    }
-                }
+                    @Override
+                    public void onError(com.lzy.okgo.model.Response<File> response) {
+                        super.onError(response);
 
-                // 校验文件大小...
-                return targetFile.length();
-            } catch (IOException e) {
-                retryCount++;
-                if (retryCount >= maxRetries) {
-                    throw e;
-                }
-            }
-        }
-        return -1;
+                    }
+
+                    @Override
+                    public void downloadProgress(Progress progress) {
+                        super.downloadProgress(progress);
+                        long currentSize = progress.currentSize;   // 已下载大小
+                        long totalSize = progress.totalSize;       // 总大小
+                        float fraction = progress.fraction;        // 下载进度 (0-1)
+                        int progressInt = (int) (fraction * 100);         // 下载进度百分比
+                        callback.onProgress(progressInt);
+
+                    }
+                });
+
     }
 
     // ==================== 判断文件是否为 MP4 格式 ====================
-    private boolean isFileMP4(String videoUrl) {
-        String urlLower = videoUrl.toLowerCase();
-        return urlLower.contains(".mp4") || urlLower.contains(".mp4?");
+    private boolean isFileMP4(File file, String originalUrl) {
+        // 1. 通过文件扩展名初步判断
+        String urlLower = originalUrl.toLowerCase();
+        if (urlLower.contains(".mp4") || urlLower.contains(".mp4?")) {
+            return true;
+        }
+        // 2. 可以通过文件头魔数判断（可选），这里简单返回 false 表示需要转码
+        // 实际可读取文件前几个字节判断 ftyp 等，为简化直接转码
+        return false;
     }
 
     // ==================== 使用 FFmpeg 转码为 MP4 ====================
@@ -244,8 +231,4 @@ public class VideoDownloader {
         }
     }
 
-    // ==================== 内部进度监听接口 ====================
-    private interface ProgressListener {
-        void onProgress(long downloaded, long total);
-    }
 }
