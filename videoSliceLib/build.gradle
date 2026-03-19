@@ -15,7 +15,7 @@ android {
 
     buildTypes {
         release {
-            minifyEnabled true
+            minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
@@ -38,7 +38,7 @@ afterEvaluate {
             from components.findByName(variant.name)
             groupId = 'com.github.cleverSmallPanda'
             artifactId = 'videoslicelib'
-            version = '1.0.2'
+            version = '1.0.3'
         }
     }
 }
