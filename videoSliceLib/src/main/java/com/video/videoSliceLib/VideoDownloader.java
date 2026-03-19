@@ -51,74 +51,78 @@ public class VideoDownloader {
 
     // ==================== 同步核心方法 ====================
     public void downloadVideoToMP4Sync(String videoUrl, final DownloadCallback callback) {
-        File tempFile = null;
         File outputFile = null;
+        File tempFile = null;
         try {
-            // 1. 生成临时文件（用于存放下载的原始数据）
-            String tempFileName = "temp_" + System.currentTimeMillis() + ".tmp";
-            tempFile = new File(outputDir, tempFileName);
-            // 确保父目录存在
-            tempFile.getParentFile().mkdirs();
-
-            // 2. 下载视频文件，并获取 Content-Type 和实际大小（用于进度）
-            callback.onProgress(1);
-            long totalBytes = downloadFile(videoUrl, tempFile, new ProgressListener() {
-                @Override
-                public void onProgress(long downloaded, long total) {
-                    if (total > 0) {
-                        int progress = (int) (downloaded * 90 / total); // 下载占 90%
-                        callback.onProgress(progress);
-                    }
-                }
-            });
-            if (totalBytes <= 0) {
-                callback.onError("下载失败或文件为空");
-                return;
-            }
-            callback.onProgress(90);
-
-            // 3. 确定输出文件路径（最终 MP4）
+            // 1. 确定输出文件路径
             String outputFileName = "video_" + System.currentTimeMillis() + ".mp4";
             outputFile = new File(outputDir, outputFileName);
+            outputFile.getParentFile().mkdirs();
 
-            // 4. 判断是否需要转码：如果文件已经是 MP4 格式，直接重命名；否则调用 FFmpeg 转码
-            boolean needTranscode = !isFileMP4(tempFile, videoUrl);
-            if (needTranscode) {
-                Log.d(TAG, "需要转码为 MP4");
+            // 2. 根据 URL 判断是否需要转码
+            boolean needTranscode = !isFileMP4(videoUrl);
+
+            if (!needTranscode) {
+                // 直接下载到最终文件
+                callback.onProgress(1);
+                long totalBytes = downloadFile(videoUrl, outputFile, new ProgressListener() {
+                    @Override
+                    public void onProgress(long downloaded, long total) {
+                        if (total > 0) {
+                            int progress = (int) (downloaded * 100 / total);
+                            callback.onProgress(progress);
+                        }
+                    }
+                });
+                if (totalBytes <= 0) {
+                    if (outputFile.exists()) outputFile.delete();
+                    callback.onError("下载失败或文件为空");
+                    return;
+                }
+                callback.onProgress(100);
+                callback.onComplete(outputFile.getAbsolutePath());
+            } else {
+                // 需要转码：先下载到临时文件
+                String tempFileName = "temp_" + System.currentTimeMillis() + ".tmp";
+                tempFile = new File(outputDir, tempFileName);
+                tempFile.getParentFile().mkdirs();
+
+                callback.onProgress(1);
+                long totalBytes = downloadFile(videoUrl, tempFile, new ProgressListener() {
+                    @Override
+                    public void onProgress(long downloaded, long total) {
+                        if (total > 0) {
+                            int progress = (int) (downloaded * 90 / total);
+                            callback.onProgress(progress);
+                        }
+                    }
+                });
+                if (totalBytes <= 0) {
+                    if (tempFile.exists()) tempFile.delete();
+                    callback.onError("下载失败或文件为空");
+                    return;
+                }
+                callback.onProgress(90);
+
+                // 转码
                 boolean transcodeSuccess = transcodeToMP4(tempFile, outputFile);
                 if (!transcodeSuccess) {
                     callback.onError("视频转码失败");
+                    if (tempFile.exists()) tempFile.delete();
+                    if (outputFile.exists()) outputFile.delete();
                     return;
                 }
-            } else {
-                Log.d(TAG, "文件已是 MP4，直接移动");
-                if (!tempFile.renameTo(outputFile)) {
-                    // 重命名失败则尝试复制（跨分区情况）
-                    if (!copyFile(tempFile, outputFile)) {
-                        callback.onError("文件移动失败");
-                        return;
-                    }
-                }
+                // 清理临时文件
+                if (tempFile.exists()) tempFile.delete();
+
+                callback.onProgress(100);
+                callback.onComplete(outputFile.getAbsolutePath());
             }
-
-            // 5. 清理临时文件
-            if (tempFile.exists()) {
-                tempFile.delete();
-            }
-
-            callback.onProgress(100);
-            callback.onComplete(outputFile.getAbsolutePath());
-
         } catch (Exception e) {
             Log.e(TAG, "处理失败", e);
             callback.onError(e.getMessage());
-            // 清理残留的临时文件
-            if (tempFile != null && tempFile.exists()) {
-                tempFile.delete();
-            }
-            if (outputFile != null && outputFile.exists()) {
-                outputFile.delete();
-            }
+            if (outputFile != null && outputFile.exists()) outputFile.delete();
+            if (tempFile != null && tempFile.exists()) tempFile.delete();
         }
     }
 
@@ -189,15 +193,9 @@ public class VideoDownloader {
     }
 
     // ==================== 判断文件是否为 MP4 格式 ====================
-    private boolean isFileMP4(File file, String originalUrl) {
-        // 1. 通过文件扩展名初步判断
-        String urlLower = originalUrl.toLowerCase();
-        if (urlLower.contains(".mp4") || urlLower.contains(".mp4?")) {
-            return true;
-        }
-        // 2. 可以通过文件头魔数判断（可选），这里简单返回 false 表示需要转码
-        // 实际可读取文件前几个字节判断 ftyp 等，为简化直接转码
-        return false;
+    private boolean isFileMP4(String videoUrl) {
+        String urlLower = videoUrl.toLowerCase();
+        return urlLower.contains(".mp4") || urlLower.contains(".mp4?");
     }
 
     // ==================== 使用 FFmpeg 转码为 MP4 ====================
