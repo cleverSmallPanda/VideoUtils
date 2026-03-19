@@ -37,8 +37,8 @@ afterEvaluate {
         publishing.publications.create(variant.name,MavenPublication){
             from components.findByName(variant.name)
             groupId = 'com.github.cleverSmallPanda'
-            artifactId = 'videoUtils'
-            version = '1.0.0'
+            artifactId = 'videoslicelib'
+            version = '1.0.1'
         }
     }
 }
