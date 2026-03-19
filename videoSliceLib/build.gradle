@@ -1,0 +1,80 @@
+plugins {
+    id 'com.android.library'
+    id 'maven-publish'
+}
+
+android {
+    namespace 'com.video.videoslicelib'
+    compileSdk 35
+
+    defaultConfig {
+        minSdk 28
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        consumerProguardFiles "consumer-rules.pro"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation(platform("com.squareup.okhttp3:okhttp-bom:4.12.0"))
+    implementation 'com.squareup.okhttp3:logging-interceptor:4.12.0'
+    implementation 'com.github.bumptech.glide:okhttp3-integration:4.12.0'
+    implementation 'com.arthenica:mobile-ffmpeg-full-gpl:4.4'
+}
+afterEvaluate {
+    android.libraryVariants.each { variant ->
+        publishing.publications.create(variant.name,MavenPublication){
+            from components.findByName(variant.name)
+            groupId = 'com.github.cleverSmallPanda'
+            artifactId = 'videoUtils'
+            version = '1.0.0'
+        }
+    }
+}
+
+//afterEvaluate {
+//    publishing {
+//        publications {
+//            release(MavenPublication) {
+//                groupId = 'com.github.cleverSmallPanda'
+//                artifactId = 'videoUtils'
+//                version = '1.0.0'
+//
+//                // 获取 release 变体生成的 AAR 文件
+//                def bundleTask = tasks.findByName('bundleReleaseAar')
+//                if (bundleTask != null) {
+//                    def aarFile = bundleTask.archiveFile.get().asFile
+//                    artifact(aarFile)
+//                } else {
+//                    throw new GradleException("bundleReleaseAar task not found")
+//                }
+//
+//                // 生成 POM 文件，包含依赖信息（implementation 范围的依赖）
+//                pom.withXml {
+//                    def dependenciesNode = asNode().appendNode('dependencies')
+//                    configurations.implementation.allDependencies.each {
+//                        if (it.group != null && it.name != null && it.version != null && it.name != 'unspecified') {
+//                            def dependencyNode = dependenciesNode.appendNode('dependency')
+//                            dependencyNode.appendNode('groupId', it.group)
+//                            dependencyNode.appendNode('artifactId', it.name)
+//                            dependencyNode.appendNode('version', it.version)
+//                            dependencyNode.appendNode('scope', 'runtime')
+//                            // 通常 implementation 对应 runtime 范围
+//                        }
+//                    }
+//                }
+//            }
+//        }
+//    }
+//}
