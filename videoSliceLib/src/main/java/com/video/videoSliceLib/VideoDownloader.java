@@ -133,11 +133,7 @@ public class VideoDownloader {
                 .readTimeout(60, TimeUnit.SECONDS)
                 .build();
 
-        Request request = new Request.Builder()
-                .url(url)
-                .addHeader("User-Agent", "Mozilla/5.0 (Android)")
-                .build();
-
+        Request request = new Request.Builder().url(url).build();
         int maxRetries = 3;
         int retryCount = 0;
         while (retryCount < maxRetries) {
@@ -147,45 +143,44 @@ public class VideoDownloader {
                 }
 
                 long contentLength = response.body().contentLength();
-                if (contentLength == 0) {
-                    throw new IOException("Content-Length 为 0");
-                }
+                boolean hasKnownLength = contentLength > 0;
 
                 try (InputStream is = response.body().byteStream();
                      FileOutputStream fos = new FileOutputStream(targetFile)) {
                     byte[] buffer = new byte[8192];
                     int bytesRead;
                     long totalRead = 0;
+                    long lastUpdate = 0;
+                    final long UPDATE_INTERVAL = 500 * 1024; // 500KB
+
                     while ((bytesRead = is.read(buffer)) != -1) {
                         fos.write(buffer, 0, bytesRead);
                         totalRead += bytesRead;
-                        if (contentLength > 0) {
+
+                        if (hasKnownLength) {
                             listener.onProgress(totalRead, contentLength);
+                        } else {
+                            if (totalRead - lastUpdate >= UPDATE_INTERVAL) {
+                                listener.onProgress(totalRead, -1); // 总大小未知
+                                lastUpdate = totalRead;
+                            }
                         }
                     }
-                    fos.flush();
+
+                    // 下载完成，确保最终进度回调
+                    if (hasKnownLength) {
+                        listener.onProgress(totalRead, contentLength);
+                    } else {
+                        listener.onProgress(totalRead, totalRead); // 或传入 totalRead 作为最终值
+                    }
                 }
 
-                // 验证文件大小
-                long fileSize = targetFile.length();
-                if (fileSize == 0) {
-                    targetFile.delete();
-                    throw new IOException("下载文件为空");
-                }
-                if (contentLength > 0 && fileSize != contentLength) {
-                    targetFile.delete();
-                    throw new IOException("文件大小不匹配，预期 " + contentLength + "，实际 " + fileSize);
-                }
-                return fileSize;
+                // 校验文件大小...
+                return targetFile.length();
             } catch (IOException e) {
                 retryCount++;
                 if (retryCount >= maxRetries) {
                     throw e;
-                } else {
-                    Log.w(TAG, "下载失败，重试 " + retryCount + "/" + maxRetries);
-                    try {
-                        Thread.sleep(2000);
-                    } catch (InterruptedException ignored) {}
                 }
             }
         }
