@@ -4,8 +4,11 @@ import android.content.Context;
 import android.os.Environment;
 import android.util.Log;
 
-import com.arthenica.mobileffmpeg.Config;
-import com.arthenica.mobileffmpeg.FFmpeg;
+import com.arthenica.ffmpegkit.FFmpegKit;
+import com.arthenica.ffmpegkit.FFmpegKitConfig;
+import com.arthenica.ffmpegkit.FFmpegSession;
+import com.arthenica.ffmpegkit.LogCallback;
+import com.arthenica.ffmpegkit.ReturnCode;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -349,7 +352,8 @@ public class M3U8Downloader {
                     Log.w(TAG, "下载失败 " + index + "，重试 " + retryCount + "/" + maxRetries);
                     try {
                         Thread.sleep(2000); // 重试前等待2秒
-                    } catch (InterruptedException ignored) {}
+                    } catch (InterruptedException ignored) {
+                    }
                 }
             }
         }
@@ -393,26 +397,30 @@ public class M3U8Downloader {
 
         // 3. 设置日志回调以捕获详细输出
         StringBuilder logBuilder = new StringBuilder();
-        Config.enableLogCallback(message -> {
-            String text = message.getText();
-            logBuilder.append(text);
-            Log.d(TAG, "FFmpeg: " + text); // 实时打印，便于调试
+        FFmpegKitConfig.enableLogCallback(new LogCallback() {
+            @Override
+            public void apply(com.arthenica.ffmpegkit.Log log) {
+                String text = log.getMessage();
+                logBuilder.append(text);
+                Log.d(TAG, "FFmpeg: " + text); // 实时打印，便于调试
+            }
         });
-
         // 4. 同步执行
-        int rc = FFmpeg.execute(cmd);
+        String cmdString = VideoConverter.buildCommandString(cmd);
 
+        FFmpegSession session = FFmpegKit.execute(cmdString);
+        ReturnCode returnCode = session.getReturnCode();
         // 5. 清理回调
-        Config.enableLogCallback(null);
+        FFmpegKitConfig.enableLogCallback(null);
 
         // 6. 删除临时列表文件
         listFile.delete();
 
-        if (rc == Config.RETURN_CODE_SUCCESS) {
+        if (ReturnCode.isSuccess(returnCode)) {
             Log.i(TAG, "合并成功: " + outputMp4Path);
             return outputMp4Path;
         } else {
-            Log.e(TAG, "合并失败，返回值: " + rc);
+            Log.e(TAG, "合并失败，返回值: " + returnCode.getValue());
             Log.e(TAG, "完整输出: " + logBuilder.toString());
             // 删除可能损坏的输出文件
             new File(outputMp4Path).delete();

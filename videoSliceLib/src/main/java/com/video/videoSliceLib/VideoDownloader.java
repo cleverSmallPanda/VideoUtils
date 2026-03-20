@@ -4,8 +4,11 @@ import android.content.Context;
 import android.os.Environment;
 import android.util.Log;
 
-import com.arthenica.mobileffmpeg.Config;
-import com.arthenica.mobileffmpeg.FFmpeg;
+import com.arthenica.ffmpegkit.FFmpegKit;
+import com.arthenica.ffmpegkit.FFmpegKitConfig;
+import com.arthenica.ffmpegkit.FFmpegSession;
+import com.arthenica.ffmpegkit.LogCallback;
+import com.arthenica.ffmpegkit.ReturnCode;
 import com.lzy.okgo.OkGo;
 import com.lzy.okgo.callback.FileCallback;
 import com.lzy.okgo.model.Progress;
@@ -31,7 +34,9 @@ public class VideoDownloader {
     // 下载回调接口
     public interface DownloadCallback {
         void onProgress(int progress);        // 0-100
+
         void onComplete(String mp4Path);      // 返回最终 MP4 文件路径
+
         void onError(String error);            // 错误信息
     }
 
@@ -66,6 +71,17 @@ public class VideoDownloader {
         OkHttpClient client = new OkHttpClient.Builder()
                 .connectTimeout(60, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
+                .addInterceptor(chain -> {
+                    // 添加浏览器风格的请求头
+                    okhttp3.Request original = chain.request();
+                    okhttp3.Request request = original.newBuilder()
+                            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                            .header("Accept", "video/webm,video/mp4,video/*;q=0.9,*/*;q=0.8")
+                            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+                            .header("Range", "bytes=0-") // 可选，确保从开头下载
+                            .build();
+                    return chain.proceed(request);
+                })
                 .build();
         // 发起异步下载请求
         OkGo.<File>get(videoUrl)
@@ -133,7 +149,7 @@ public class VideoDownloader {
     }
 
     // ==================== 下载核心（使用 OkHttp，支持进度） ====================
-    private void downloadFile(String url, File targetFile, DownloadCallback callback)  {
+    private void downloadFile(String url, File targetFile, DownloadCallback callback) {
 
         OkHttpClient client = new OkHttpClient.Builder()
                 .connectTimeout(60, TimeUnit.SECONDS)
@@ -196,23 +212,30 @@ public class VideoDownloader {
 
         // 启用日志回调（可选）
         StringBuilder log = new StringBuilder();
-        Config.enableLogCallback(message -> {
-            String text = message.getText();
-            log.append(text);
-            Log.d(TAG, "FFmpeg: " + text);
+        FFmpegKitConfig.enableLogCallback(new LogCallback() {
+            @Override
+            public void apply(com.arthenica.ffmpegkit.Log log) {
+                String text = log.getMessage();
+                Log.d(TAG, "FFmpeg: " + text);
+            }
         });
 
-        int rc = FFmpeg.execute(cmd);
-        Config.enableLogCallback(null);
+        String cmdString = VideoConverter.buildCommandString(cmd);
+        FFmpegSession session = FFmpegKit.execute(cmdString);
+        ReturnCode returnCode = session.getReturnCode();
+        // 5. 清理回调
+        FFmpegKitConfig.enableLogCallback(null);
 
-        if (rc == Config.RETURN_CODE_SUCCESS) {
+        if (ReturnCode.isSuccess(returnCode)) {
             Log.i(TAG, "转码成功: " + outputFile.getAbsolutePath());
             return true;
         } else {
-            Log.e(TAG, "转码失败，返回码: " + rc);
+            Log.e(TAG, "转码失败，返回码: " + returnCode.getValue());
             Log.e(TAG, "FFmpeg 输出: " + log.toString());
             return false;
         }
+
+
     }
 
     // ==================== 辅助：复制文件（用于跨分区移动） ====================

@@ -1,11 +1,15 @@
 package com.video.videoSliceLib;
 
 import android.content.Context;
+import android.util.Log;
 
-import com.arthenica.mobileffmpeg.Config;
-import com.arthenica.mobileffmpeg.FFmpeg;
-import com.arthenica.mobileffmpeg.Statistics;
-import com.arthenica.mobileffmpeg.StatisticsCallback;
+import com.arthenica.ffmpegkit.FFmpegKit;
+import com.arthenica.ffmpegkit.FFmpegKitConfig;
+import com.arthenica.ffmpegkit.FFmpegSession;
+import com.arthenica.ffmpegkit.FFmpegSessionCompleteCallback;
+import com.arthenica.ffmpegkit.ReturnCode;
+import com.arthenica.ffmpegkit.Statistics;
+import com.arthenica.ffmpegkit.StatisticsCallback;
 
 import java.io.File;
 
@@ -46,7 +50,7 @@ public class VideoConverter {
             String thumbnailPath = outputDir + "/" + videoId + ".jpg";
 
             // 启用统计信息回调
-            Config.enableStatisticsCallback(new StatisticsCallback() {
+            FFmpegKitConfig.enableStatisticsCallback(new StatisticsCallback() {
                 @Override
                 public void apply(Statistics statistics) {
                     float progress = (float) (statistics.getTime() *100f / duration);
@@ -75,22 +79,29 @@ public class VideoConverter {
                     "-map", "0:v:0",      // 再次使用第一个视频流
                     "-frames:v", "1",     // 只取1帧
                     "-ss", "00:00:01",    // 从第1秒开始取（避免黑屏）
-                    "-vf", "scale='min(1080,iw)':-2", // 缩放到宽度1080，高度按比例
                     "-q:v", "2",          // 图片质量（2-31，越小质量越高）
                     "-f", "image2",
                     thumbnailPath
             };
 
-            long exeId = FFmpeg.executeAsync(cmd, (executionId, returnCode) -> {
-                Config.enableStatisticsCallback(null); // 移除回调
 
-                if (returnCode == RETURN_CODE_SUCCESS) {
-                    File m3u8File = new File(m3u8Path);
-                    callback.onSuccess(m3u8File, outputDirFile);
-                } else {
-                    callback.onFailure("视频转换失败，错误码: " + returnCode);
+            String cmdString = buildCommandString(cmd);
+
+            FFmpegKit.executeAsync(cmdString, new FFmpegSessionCompleteCallback() {
+                @Override
+                public void apply(FFmpegSession session) {
+                    ReturnCode returnCode = session.getReturnCode();
+                    if (ReturnCode.isSuccess(returnCode)) {
+                        File m3u8File = new File(m3u8Path);
+                        callback.onSuccess(m3u8File, outputDirFile);
+                    } else if (ReturnCode.isCancel(returnCode)) {
+                        Log.d("FFmpegKit", "FFmpeg command execution cancelled.");
+                    } else {
+                        callback.onFailure("视频转换失败，错误码: " + returnCode);
+                    }
                 }
             });
+
         } catch (Exception e) {
             callback.onFailure(e.getMessage());
         }
